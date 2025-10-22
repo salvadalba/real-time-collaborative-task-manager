@@ -1,0 +1,353 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum UserRole {
+  admin
+  manager
+  member
+  viewer
+}
+
+enum TaskStatus {
+  todo
+  in_progress
+  review
+  done
+  blocked
+}
+
+enum ProjectStatus {
+  active
+  completed
+  archived
+  on_hold
+}
+
+enum Priority {
+  low
+  medium
+  high
+  critical
+}
+
+enum PresenceStatus {
+  viewing
+  editing
+  idle
+}
+
+enum ActivityEntityType {
+  task
+  project
+  comment
+  attachment
+  time_entry
+}
+
+enum ActivityAction {
+  created
+  updated
+  deleted
+  assigned
+  completed
+  commented
+}
+
+enum OperationType {
+  insert
+  delete
+  retain
+  format
+}
+
+enum DependencyType {
+  finish_to_start
+  start_to_start
+  finish_to_finish
+  start_to_finish
+}
+
+// Models
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  passwordHash String  @map("password_hash")
+  firstName   String   @map("first_name")
+  lastName    String   @map("last_name")
+  avatarUrl   String?  @map("avatar_url")
+  role        UserRole @default(member)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  ownedWorkspaces     Workspace[]     @relation("WorkspaceOwner")
+  workspaceMembers    WorkspaceMember[]
+  createdProjects     Project[]       @relation("ProjectCreator")
+  projectMembers      ProjectMember[]
+  createdTasks        Task[]          @relation("TaskCreator")
+  assignedTasks       Task[]          @relation("TaskAssignee")
+  comments            Comment[]
+  uploadedAttachments Attachment[]
+  timeEntries         TimeEntry[]
+  activities          Activity[]
+  presence            UserPresence[]
+  operations          Operation[]
+
+  @@map("users")
+}
+
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  ownerId     String   @map("owner_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  owner       User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members     WorkspaceMember[]
+  projects    Project[]
+  activities  Activity[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  role        UserRole
+  joinedAt    DateTime @default(now()) @map("joined_at")
+
+  // Relations
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  workspaceId String        @map("workspace_id")
+  name        String
+  description String?
+  status      ProjectStatus @default(active)
+  priority    Priority      @default(medium)
+  startDate   DateTime?     @map("start_date") @db.Date
+  endDate     DateTime?     @map("end_date") @db.Date
+  createdBy   String        @map("created_by")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  creator       User            @relation("ProjectCreator", fields: [createdBy], references: [id])
+  members       ProjectMember[]
+  tasks         Task[]
+  activities    Activity[]
+
+  @@map("projects")
+}
+
+model ProjectMember {
+  id        String   @id @default(cuid())
+  projectId String   @map("project_id")
+  userId    String   @map("user_id")
+  role      String   // 'owner', 'admin', 'member', 'viewer'
+  joinedAt  DateTime @default(now()) @map("joined_at")
+
+  // Relations
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@map("project_members")
+}
+
+model Task {
+  id             String      @id @default(cuid())
+  projectId      String      @map("project_id")
+  title          String
+  description    String?
+  status         TaskStatus  @default(todo)
+  priority       Priority    @default(medium)
+  assigneeId     String?     @map("assignee_id")
+  createdBy      String      @map("created_by")
+  dueDate        DateTime?   @map("due_date")
+  estimatedHours Int?        @map("estimated_hours")
+  actualHours    Int         @default(0) @map("actual_hours")
+  parentTaskId   String?     @map("parent_task_id")
+  position       Int
+  tags           String[]
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee     User?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  creator      User           @relation("TaskCreator", fields: [createdBy], references: [id])
+  parentTask   Task?          @relation("TaskHierarchy", fields: [parentTaskId], references: [id])
+  subtasks     Task[]         @relation("TaskHierarchy")
+  dependencies TaskDependency[] @relation("DependentTask")
+  dependents   TaskDependency[] @relation("DependsOnTask")
+  comments     Comment[]
+  attachments  Attachment[]
+  timeEntries  TimeEntry[]
+  activities   Activity[]
+  operations   Operation[]
+
+  @@map("tasks")
+}
+
+model TaskDependency {
+  id                 String         @id @default(cuid())
+  taskId             String         @map("task_id")
+  dependsOnTaskId    String         @map("depends_on_task_id")
+  dependencyType     DependencyType @default(finish_to_start) @map("dependency_type")
+
+  // Relations
+  task          Task @relation("DependentTask", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOnTask Task @relation("DependsOnTask", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnTaskId])
+  @@map("task_dependencies")
+}
+
+model Comment {
+  id         String   @id @default(cuid())
+  taskId     String   @map("task_id")
+  userId     String   @map("user_id")
+  content    String
+  mentions   String[] // Array of user IDs
+  isEdited   Boolean  @default(false) @map("is_edited")
+  editedAt   DateTime? @map("edited_at")
+  parentId   String?  @map("parent_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  task    Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent  Comment? @relation("CommentReplies", fields: [parentId], references: [id])
+  replies Comment[] @relation("CommentReplies")
+
+  @@map("comments")
+}
+
+model Attachment {
+  id           String   @id @default(cuid())
+  taskId       String   @map("task_id")
+  uploadedBy   String   @map("uploaded_by")
+  filename     String
+  originalName String   @map("original_name")
+  fileSize     Int      @map("file_size")
+  mimeType     String   @map("mime_type")
+  s3Key        String   @map("s3_key")
+  s3Bucket     String   @map("s3_bucket")
+  thumbnailUrl String?  @map("thumbnail_url")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  task      Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploader  User @relation(fields: [uploadedBy], references: [id])
+
+  @@map("attachments")
+}
+
+model TimeEntry {
+  id          String   @id @default(cuid())
+  taskId      String   @map("task_id")
+  userId      String   @map("user_id")
+  description String?
+  hours       Decimal  @db.Decimal(5, 2)
+  date        DateTime @db.Date
+  isBillable  Boolean  @default(true) @map("is_billable")
+  externalService String? @map("external_service") // 'toggl', 'harvest'
+  externalId     String?  @map("external_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("time_entries")
+}
+
+model Activity {
+  id          String            @id @default(cuid())
+  workspaceId String            @map("workspace_id")
+  userId      String            @map("user_id")
+  entityType ActivityEntityType @map("entity_type")
+  entityId    String            @map("entity_id")
+  action      ActivityAction
+  details     Json              // Flexible JSON field for activity details
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  // Relations
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@map("activities")
+}
+
+model UserPresence {
+  id            String         @id @default(cuid())
+  userId        String         @map("user_id")
+  workspaceId   String         @map("workspace_id")
+  entityType    String         @map("entity_type") // 'task', 'project'
+  entityId      String         @map("entity_id")
+  status        PresenceStatus
+  cursorPosition Json?         @map("cursor_position")
+  lastSeen      DateTime       @default(now()) @map("last_seen")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, entityType, entityId])
+  @@index([entityType, entityId, lastSeen])
+  @@map("user_presence")
+}
+
+model Operation {
+  id             String       @id @default(cuid())
+  entityType     String       @map("entity_type") // 'task_description', 'comment'
+  entityId       String       @map("entity_id")
+  userId         String       @map("user_id")
+  operationType  OperationType @map("operation_type")
+  operationData  Json          @map("operation_data")
+  sequenceNumber Int          @map("sequence_number")
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([entityType, entityId, sequenceNumber])
+  @@map("operations")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("refresh_tokens")
+}
